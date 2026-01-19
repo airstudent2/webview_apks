@@ -20,10 +20,68 @@ jobs:
         with:
           flutter-version: "stable"
 
-      - run: flutter pub get
-      - run: flutter build apk --release
+      - name: Create Flutter project
+        run: |
+          flutter create app
+          cd app
+          flutter pub add webview_flutter
+
+      - name: Replace main.dart
+        run: |
+          cd app
+          cat > lib/main.dart << 'EOF'
+          import 'package:flutter/material.dart';
+          import 'package:webview_flutter/webview_flutter.dart';
+
+          void main() => runApp(const MyApp());
+
+          class MyApp extends StatelessWidget {
+            const MyApp({super.key});
+
+            @override
+            Widget build(BuildContext context) {
+              return const MaterialApp(
+                debugShowCheckedModeBanner: false,
+                home: WebViewPage(),
+              );
+            }
+          }
+
+          class WebViewPage extends StatefulWidget {
+            const WebViewPage({super.key});
+
+            @override
+            State<WebViewPage> createState() => _WebViewPageState();
+          }
+
+          class _WebViewPageState extends State<WebViewPage> {
+            late final WebViewController controller;
+
+            @override
+            void initState() {
+              super.initState();
+              controller = WebViewController()
+                ..setJavaScriptMode(JavaScriptMode.unrestricted)
+                ..loadRequest(
+                  Uri.parse("https://customise-web-hosting-pps.onrender.com"),
+                );
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              return Scaffold(
+                body: WebViewWidget(controller: controller),
+              );
+            }
+          }
+          EOF
+
+      - name: Build APK
+        run: |
+          cd app
+          flutter build apk --release
 
       - uses: actions/upload-artifact@v4
         with:
           name: app-release
-          path: build/app/outputs/flutter-apk/app-release.apk
+          path: app/build/app/outputs/flutter-apk/app-release.apk
