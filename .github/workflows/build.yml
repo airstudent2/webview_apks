@@ -24,16 +24,52 @@ jobs:
           flutter-version: "3.24.5"
           channel: "stable"
 
+      - name: Set App URL
+        run: echo "APP_URL=https://customise-web-hosting-pps.onrender.com" >> $GITHUB_ENV
+
       - name: Create Flutter project
         run: |
           flutter create /tmp/app
           cd /tmp/app
           flutter pub add webview_flutter
 
-      - name: Replace main.dart
+      # Fix for WebView plugin: It requires a higher minimum Android SDK version (21+)
+      - name: Fix Android Min SDK
         run: |
           cd /tmp/app
-          cat > lib/main.dart << 'EOF'
+          echo "flutter.minSdkVersion=21" >> android/local.properties
+
+      - name: Add Android permissions + settings
+        run: |
+          cd /tmp/app
+          cat > android/app/src/main/AndroidManifest.xml << 'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+
+              <application
+                  android:label="WebView App"
+                  android:icon="@mipmap/ic_launcher"
+                  android:usesCleartextTraffic="true">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTop">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+      - name: Replace main.dart (Fix ERR_CACHE_MISS + Retry)
+        run: |
+          cd /tmp/app
+          # Using EOF (unquoted) allows ${APP_URL} to be replaced by the shell.
+          # We must escape Dart's own variables (like ${err}) with a backslash (\).
+          cat > lib/main.dart << EOF
           import 'package:flutter/material.dart';
           import 'package:webview_flutter/webview_flutter.dart';
 
@@ -60,21 +96,112 @@ jobs:
 
           class _WebViewPageState extends State<WebViewPage> {
             late final WebViewController controller;
+            bool loading = true;
+            String? errorText;
+
+            // This URL comes from the GitHub Environment Variable
+            final String url = "${APP_URL}";
 
             @override
             void initState() {
               super.initState();
+
               controller = WebViewController()
                 ..setJavaScriptMode(JavaScriptMode.unrestricted)
-                ..loadRequest(
-                  Uri.parse("https://customise-web-hosting-pps.onrender.com"),
-                );
+                ..setNavigationDelegate(
+                  NavigationDelegate(
+                    onPageStarted: (_) {
+                      if (mounted) {
+                        setState(() {
+                          loading = true;
+                          errorText = null;
+                        });
+                      }
+                    },
+                    onPageFinished: (_) {
+                      if (mounted) {
+                        setState(() => loading = false);
+                      }
+                    },
+                    onWebResourceError: (err) {
+                      if (mounted) {
+                        setState(() {
+                          loading = false;
+                          // Error details for debugging
+                          errorText = "\${err.errorCode}: \${err.description}";
+                        });
+                      }
+                    },
+                  ),
+                )
+                ..clearCache() // Clears cache to prevent stale data/ERR_CACHE_MISS
+                ..loadRequest(Uri.parse(url));
+            }
+
+            Future<void> reloadPage() async {
+              if (mounted) {
+                setState(() {
+                  loading = true;
+                  errorText = null;
+                });
+              }
+              await controller.clearCache();
+              await controller.loadRequest(Uri.parse(url));
             }
 
             @override
             Widget build(BuildContext context) {
               return Scaffold(
-                body: WebViewWidget(controller: controller),
+                appBar: AppBar(
+                  title: const Text("WebView App"),
+                  actions: [
+                    IconButton(
+                      icon: const Icon(Icons.refresh),
+                      onPressed: reloadPage,
+                    ),
+                  ],
+                ),
+                body: Stack(
+                  children: [
+                    WebViewWidget(controller: controller),
+
+                    if (loading)
+                      const Center(child: CircularProgressIndicator()),
+
+                    if (errorText != null)
+                      Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(24.0),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.error_outline, size: 48, color: Colors.red),
+                              const SizedBox(height: 16),
+                              const Text(
+                                "Webpage load hoyni",
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                "Error: \$errorText",
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(color: Colors.grey),
+                              ),
+                              const SizedBox(height: 20),
+                              ElevatedButton.icon(
+                                onPressed: reloadPage,
+                                icon: const Icon(Icons.refresh),
+                                label: const Text("Retry Connection"),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
               );
             }
           }
