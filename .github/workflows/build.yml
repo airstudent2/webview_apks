@@ -21,16 +21,15 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: "stable"
+          flutter-version: "3.24.5"
+          channel: "stable"
 
-      # নতুন, আলাদা folder এ Flutter project বানানো হবে (conflict হবে না)
       - name: Create Flutter project
         run: |
           flutter create /tmp/app
           cd /tmp/app
           flutter pub add webview_flutter
 
-      # WebView code বসানো
       - name: Replace main.dart
         run: |
           cd /tmp/app
