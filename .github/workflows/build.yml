@@ -29,37 +29,56 @@ jobs:
 
       - name: Create Flutter project
         run: |
+          # ডিফল্ট প্যাকেজ নাম com.example.app দিয়ে প্রজেক্ট তৈরি হচ্ছে
           flutter create /tmp/app
           cd /tmp/app
           flutter pub add webview_flutter
 
-      # Fix for WebView plugin: It requires a higher minimum Android SDK version (21+)
       - name: Fix Android Min SDK
         run: |
           cd /tmp/app
+          # WebView ঠিকভাবে চলার জন্য মিনিমাম SDK 21 প্রয়োজন
           echo "flutter.minSdkVersion=21" >> android/local.properties
 
-      - name: Add Android permissions + settings
+      - name: Update AndroidManifest (Fix Embedding V1 Error)
         run: |
           cd /tmp/app
+          # এখানে আমরা নতুন manifest লিখছি কিন্তু প্রয়োজনীয় ট্যাগগুলো রেখে দিচ্ছি
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              package="com.example.app">
+
               <uses-permission android:name="android.permission.INTERNET"/>
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
 
               <application
                   android:label="WebView App"
+                  android:name="${applicationName}"
                   android:icon="@mipmap/ic_launcher"
                   android:usesCleartextTraffic="true">
+                  
                   <activity
                       android:name=".MainActivity"
                       android:exported="true"
-                      android:launchMode="singleTop">
+                      android:launchMode="singleTop"
+                      android:theme="@style/LaunchTheme"
+                      android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+                      android:hardwareAccelerated="true"
+                      android:windowSoftInputMode="adjustResize">
+                      <meta-data
+                        android:name="io.flutter.embedding.android.NormalTheme"
+                        android:resource="@style/NormalTheme"
+                        />
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN"/>
                           <category android:name="android.intent.category.LAUNCHER"/>
                       </intent-filter>
                   </activity>
+                  
+                  <!-- এটি খুব জরুরি: এরর ফিক্স করার জন্য v2 embedding ট্যাগ -->
+                  <meta-data
+                      android:name="flutterEmbedding"
+                      android:value="2" />
               </application>
           </manifest>
           EOF
@@ -67,8 +86,7 @@ jobs:
       - name: Replace main.dart (Fix ERR_CACHE_MISS + Retry)
         run: |
           cd /tmp/app
-          # Using EOF (unquoted) allows ${APP_URL} to be replaced by the shell.
-          # We must escape Dart's own variables (like ${err}) with a backslash (\).
+          # এখানে আপনার ওয়েবসাইট লিঙ্ক অটোমেটিক বসে যাবে
           cat > lib/main.dart << EOF
           import 'package:flutter/material.dart';
           import 'package:webview_flutter/webview_flutter.dart';
@@ -98,53 +116,35 @@ jobs:
             late final WebViewController controller;
             bool loading = true;
             String? errorText;
-
-            // This URL comes from the GitHub Environment Variable
             final String url = "${APP_URL}";
 
             @override
             void initState() {
               super.initState();
-
               controller = WebViewController()
                 ..setJavaScriptMode(JavaScriptMode.unrestricted)
                 ..setNavigationDelegate(
                   NavigationDelegate(
                     onPageStarted: (_) {
-                      if (mounted) {
-                        setState(() {
-                          loading = true;
-                          errorText = null;
-                        });
-                      }
+                      if (mounted) setState(() { loading = true; errorText = null; });
                     },
                     onPageFinished: (_) {
-                      if (mounted) {
-                        setState(() => loading = false);
-                      }
+                      if (mounted) setState(() => loading = false);
                     },
                     onWebResourceError: (err) {
-                      if (mounted) {
-                        setState(() {
-                          loading = false;
-                          // Error details for debugging
-                          errorText = "\${err.errorCode}: \${err.description}";
-                        });
-                      }
+                      if (mounted) setState(() { 
+                        loading = false; 
+                        errorText = "\${err.description} (\${err.errorCode})"; 
+                      });
                     },
                   ),
                 )
-                ..clearCache() // Clears cache to prevent stale data/ERR_CACHE_MISS
+                ..clearCache()
                 ..loadRequest(Uri.parse(url));
             }
 
             Future<void> reloadPage() async {
-              if (mounted) {
-                setState(() {
-                  loading = true;
-                  errorText = null;
-                });
-              }
+              if (mounted) setState(() { loading = true; errorText = null; });
               await controller.clearCache();
               await controller.loadRequest(Uri.parse(url));
             }
@@ -155,47 +155,27 @@ jobs:
                 appBar: AppBar(
                   title: const Text("WebView App"),
                   actions: [
-                    IconButton(
-                      icon: const Icon(Icons.refresh),
-                      onPressed: reloadPage,
-                    ),
+                    IconButton(icon: const Icon(Icons.refresh), onPressed: reloadPage),
                   ],
                 ),
                 body: Stack(
                   children: [
                     WebViewWidget(controller: controller),
-
-                    if (loading)
-                      const Center(child: CircularProgressIndicator()),
-
+                    if (loading) const Center(child: CircularProgressIndicator()),
                     if (errorText != null)
                       Center(
                         child: Padding(
-                          padding: const EdgeInsets.all(24.0),
+                          padding: const EdgeInsets.all(20),
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              const Icon(Icons.error_outline, size: 48, color: Colors.red),
-                              const SizedBox(height: 16),
-                              const Text(
-                                "Webpage load hoyni",
-                                style: TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                "Error: \$errorText",
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(color: Colors.grey),
-                              ),
-                              const SizedBox(height: 20),
-                              ElevatedButton.icon(
-                                onPressed: reloadPage,
-                                icon: const Icon(Icons.refresh),
-                                label: const Text("Retry Connection"),
-                              ),
+                              const Icon(Icons.wifi_off, size: 50, color: Colors.red),
+                              const SizedBox(height: 10),
+                              const Text("Connection Failed", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                              const SizedBox(height: 5),
+                              Text(errorText!, textAlign: TextAlign.center),
+                              const SizedBox(height: 15),
+                              ElevatedButton(onPressed: reloadPage, child: const Text("Retry")),
                             ],
                           ),
                         ),
