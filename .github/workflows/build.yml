@@ -31,76 +31,21 @@ jobs:
         run: |
           flutter create /tmp/app
           cd /tmp/app
+          # শুধু webview_flutter + permission_handler
           flutter pub add webview_flutter
-          flutter pub add webview_flutter_android
           flutter pub add permission_handler
-          flutter pub add file_picker
 
-      - name: Fix Android Build Configuration (Rewrite Root Gradle)
+      - name: Set Android minSdkVersion
+        run: |
+          cd /tmp/app
+          echo "flutter.minSdkVersion=21" >> android/local.properties
+
+      - name: Use default android/build.gradle (কোন হ্যাক না)
         run: |
           cd /tmp/app/android
-          
-          # 1. local.properties সেটআপ
-          echo "flutter.minSdkVersion=21" >> local.properties
-          echo "flutter.targetSdkVersion=34" >> local.properties
-          echo "flutter.compileSdkVersion=34" >> local.properties
+          # কিছুই টাচ করব না, Flutter ডিফল্ট ফাইলই থাকবে
 
-          # 2. পুরো build.gradle নতুন করে লেখা (Safe Fix)
-          cat > build.gradle << 'GRADLE_EOF'
-          buildscript {
-              ext.kotlin_version = '1.9.0'
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-
-              dependencies {
-                  classpath 'com.android.tools.build:gradle:8.0.0'
-                  classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
-              }
-          }
-
-          allprojects {
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-          }
-
-          rootProject.buildDir = '../build'
-
-          subprojects {
-              project.buildDir = "${rootProject.buildDir}/${project.name}"
-          }
-
-          subprojects {
-              project.evaluationDependsOn(':app')
-          }
-          
-          // এই ব্লকটি প্লাগইন কনফিগারেশন ফিক্স করবে - কিন্তু সঠিক জায়গায়
-          subprojects {
-              afterEvaluate { project ->
-                  if (project.hasProperty("android")) {
-                      android {
-                          compileSdkVersion 34
-                          defaultConfig {
-                              minSdkVersion 21
-                              targetSdkVersion 34
-                          }
-                      }
-                  }
-              }
-          }
-
-          tasks.register("clean", Delete) {
-              delete rootProject.buildDir
-          }
-          GRADLE_EOF
-          
-          # 3. settings.gradle এ প্লাগইন ম্যানেজমেন্ট ফিক্স (যদি দরকার হয়)
-          # তবে সাধারণত উপরের build.gradle ফিক্সই যথেষ্ট।
-
-      - name: Update AndroidManifest (Full Permissions)
+      - name: Update AndroidManifest (Permissions)
         run: |
           cd /tmp/app
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
@@ -109,19 +54,22 @@ jobs:
 
               <uses-permission android:name="android.permission.INTERNET"/>
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+
+              <!-- Storage / Media permissions (Android 13 পর্যন্ত কভার) -->
               <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
               <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
-              <uses-permission android:name="android.permission.CAMERA"/>
               <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
               <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
+              <uses-permission android:name="android.permission.CAMERA"/>
+
+              <!-- Notifications -->
               <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
               <application
                   android:label="HOST AIR"
                   android:name="${applicationName}"
                   android:icon="@mipmap/ic_launcher"
-                  android:usesCleartextTraffic="true"
-                  android:hardwareAccelerated="true">
+                  android:usesCleartextTraffic="true">
                   
                   <activity
                       android:name=".MainActivity"
@@ -136,10 +84,10 @@ jobs:
                         />
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN"/>
-                          ategory android:name="android.intent.category.LAUNCHER"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
                       </intent-filter>
                   </activity>
-                  
+
                   <meta-data
                       android:name="flutterEmbedding"
                       android:value="2" />
@@ -147,16 +95,14 @@ jobs:
           </manifest>
           EOF
 
-      - name: Replace main.dart (File Upload Fix)
+      - name: Replace main.dart (Simple WebView App)
         run: |
           cd /tmp/app
           cat > lib/main.dart << 'DARTEOF'
           import 'package:flutter/material.dart';
           import 'package:flutter/services.dart';
           import 'package:webview_flutter/webview_flutter.dart';
-          import 'package:webview_flutter_android/webview_flutter_android.dart';
           import 'package:permission_handler/permission_handler.dart';
-          import 'package:file_picker/file_picker.dart';
 
           void main() {
             WidgetsFlutterBinding.ensureInitialized();
@@ -185,89 +131,67 @@ jobs:
           }
 
           class _WebViewPageState extends State<WebViewPage> {
-            late final WebViewController controller;
-            bool loading = true;
-            String? errorText;
-            final String url = const String.fromEnvironment('APP_URL', 
-                defaultValue: 'https://customise-web-hosting-pps.onrender.com');
+            late final WebViewController _controller;
+            bool _loading = true;
+            String? _error;
+            final String _url = const String.fromEnvironment(
+              'APP_URL',
+              defaultValue: 'https://customise-web-hosting-pps.onrender.com',
+            );
 
             @override
             void initState() {
               super.initState();
-              requestPermissions();
-              initWebView();
-            }
-
-            Future<void> requestPermissions() async {
-              await [
-                Permission.camera,
-                Permission.storage,
-                Permission.notification,
-                Permission.photos,
-                Permission.videos,
-              ].request();
-            }
-
-            void initWebView() {
-              late final PlatformWebViewControllerCreationParams params;
-              
-              if (WebViewPlatform.instance is AndroidWebViewPlatform) {
-                params = AndroidWebViewControllerCreationParams();
-              } else {
-                params = const PlatformWebViewControllerCreationParams();
-              }
-
-              final webViewController = WebViewController.fromPlatformCreationParams(params);
-
-              webViewController
+              _requestPermissions();
+              _controller = WebViewController()
                 ..setJavaScriptMode(JavaScriptMode.unrestricted)
-                ..setBackgroundColor(const Color(0x00000000))
                 ..setNavigationDelegate(
                   NavigationDelegate(
                     onPageStarted: (_) {
-                      if (mounted) setState(() { loading = true; errorText = null; });
+                      if (mounted) {
+                        setState(() {
+                          _loading = true;
+                          _error = null;
+                        });
+                      }
                     },
                     onPageFinished: (_) {
-                      if (mounted) setState(() => loading = false);
+                      if (mounted) {
+                        setState(() => _loading = false);
+                      }
                     },
                     onWebResourceError: (err) {
-                      if (mounted) setState(() { 
-                        loading = false; 
-                        errorText = err.description; 
-                      });
+                      if (mounted) {
+                        setState(() {
+                          _loading = false;
+                          _error = err.description;
+                        });
+                      }
                     },
                   ),
                 )
-                ..loadRequest(Uri.parse(url));
-
-              if (webViewController.platform is AndroidWebViewController) {
-                AndroidWebViewController.enableDebugging(false);
-                final androidController = webViewController.platform as AndroidWebViewController;
-                androidController.setMediaPlaybackRequiresUserGesture(false);
-                
-                androidController.setOnShowFileSelector((params) async {
-                  try {
-                    FilePickerResult? result = await FilePicker.platform.pickFiles(
-                      allowMultiple: params.acceptTypes.isEmpty || params.mode == FileSelectorMode.openMultiple,
-                      type: FileType.any,
-                    );
-                    if (result != null && result.files.isNotEmpty) {
-                      return result.files.where((f) => f.path != null).map((f) => f.path!).toList();
-                    }
-                    return [];
-                  } catch (e) {
-                    return [];
-                  }
-                });
-              }
-
-              controller = webViewController;
+                ..loadRequest(Uri.parse(_url));
             }
 
-            Future<void> reloadPage() async {
-              if (mounted) setState(() { loading = true; errorText = null; });
-              await controller.clearCache();
-              await controller.loadRequest(Uri.parse(url));
+            Future<void> _requestPermissions() async {
+              await [
+                Permission.storage,
+                Permission.photos,
+                Permission.videos,
+                Permission.camera,
+                Permission.notification,
+              ].request();
+            }
+
+            Future<void> _reload() async {
+              if (mounted) {
+                setState(() {
+                  _loading = true;
+                  _error = null;
+                });
+              }
+              await _controller.clearCache();
+              await _controller.loadRequest(Uri.parse(_url));
             }
 
             @override
@@ -277,9 +201,10 @@ jobs:
                 body: SafeArea(
                   child: Stack(
                     children: [
-                      WebViewWidget(controller: controller),
-                      if (loading) const Center(child: CircularProgressIndicator()),
-                      if (errorText != null)
+                      WebViewWidget(controller: _controller),
+                      if (_loading)
+                        const Center(child: CircularProgressIndicator()),
+                      if (_error != null)
                         Center(
                           child: Padding(
                             padding: const EdgeInsets.all(20),
@@ -288,8 +213,16 @@ jobs:
                               children: [
                                 const Icon(Icons.error_outline, size: 48, color: Colors.white),
                                 const SizedBox(height: 10),
-                                Text(errorText!, style: const TextStyle(color: Colors.white)),
-                                ElevatedButton(onPressed: reloadPage, child: const Text("Retry")),
+                                Text(
+                                  _error!,
+                                  style: const TextStyle(color: Colors.white),
+                                  textAlign: TextAlign.center,
+                                ),
+                                const SizedBox(height: 10),
+                                ElevatedButton(
+                                  onPressed: _reload,
+                                  child: const Text('Retry'),
+                                ),
                               ],
                             ),
                           ),
