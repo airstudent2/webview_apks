@@ -36,19 +36,48 @@ jobs:
           flutter pub add permission_handler
           flutter pub add file_picker
 
-      - name: Fix Android Build Configuration (Forcing Subprojects)
+      - name: Fix Android Build Configuration (Rewrite Root Gradle)
         run: |
           cd /tmp/app/android
           
-          # 1. local.properties এ ভ্যালু সেট করা (নিরাপত্তার জন্য)
+          # 1. local.properties সেটআপ
           echo "flutter.minSdkVersion=21" >> local.properties
           echo "flutter.targetSdkVersion=34" >> local.properties
           echo "flutter.compileSdkVersion=34" >> local.properties
 
-          # 2. সবচেয়ে গুরুত্বপূর্ণ ফিক্স: root build.gradle এ সাব-প্রজেক্ট কনফিগারেশন ইনজেক্ট করা
-          # এটি file_picker সহ সব প্লাগইনকে সঠিক SDK ভার্সন ব্যবহার করতে বাধ্য করবে।
-          cat >> build.gradle << 'GRADLE_EOF'
+          # 2. পুরো build.gradle নতুন করে লেখা (Safe Fix)
+          cat > build.gradle << 'GRADLE_EOF'
+          buildscript {
+              ext.kotlin_version = '1.9.0'
+              repositories {
+                  google()
+                  mavenCentral()
+              }
 
+              dependencies {
+                  classpath 'com.android.tools.build:gradle:8.0.0'
+                  classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+              }
+          }
+
+          allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+
+          rootProject.buildDir = '../build'
+
+          subprojects {
+              project.buildDir = "${rootProject.buildDir}/${project.name}"
+          }
+
+          subprojects {
+              project.evaluationDependsOn(':app')
+          }
+          
+          // এই ব্লকটি প্লাগইন কনফিগারেশন ফিক্স করবে - কিন্তু সঠিক জায়গায়
           subprojects {
               afterEvaluate { project ->
                   if (project.hasProperty("android")) {
@@ -62,7 +91,14 @@ jobs:
                   }
               }
           }
+
+          tasks.register("clean", Delete) {
+              delete rootProject.buildDir
+          }
           GRADLE_EOF
+          
+          # 3. settings.gradle এ প্লাগইন ম্যানেজমেন্ট ফিক্স (যদি দরকার হয়)
+          # তবে সাধারণত উপরের build.gradle ফিক্সই যথেষ্ট।
 
       - name: Update AndroidManifest (Full Permissions)
         run: |
@@ -100,7 +136,7 @@ jobs:
                         />
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN"/>
-                          <category android:name="android.intent.category.LAUNCHER"/>
+                          ategory android:name="android.intent.category.LAUNCHER"/>
                       </intent-filter>
                   </activity>
                   
