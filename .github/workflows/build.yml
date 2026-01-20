@@ -36,20 +36,19 @@ jobs:
           flutter pub add permission_handler
           flutter pub add file_picker
 
-      - name: Fix Android Min SDK & Gradle Config
+      - name: Fix Android Build Configuration (Critical Fix)
         run: |
-          cd /tmp/app
+          cd /tmp/app/android
           
-          # Fix 1: Set Min SDK
-          echo "flutter.minSdkVersion=21" >> android/local.properties
+          # 1. local.properties-এ SDK ভার্সন সেট করা
+          echo "flutter.minSdkVersion=21" >> local.properties
+          echo "flutter.targetSdkVersion=34" >> local.properties
+          echo "flutter.compileSdkVersion=34" >> local.properties
           
-          # Fix 2: Provide missing Flutter properties for plugins like file_picker
-          echo "flutter.targetSdkVersion=33" >> android/local.properties
-          echo "flutter.compileSdkVersion=33" >> android/local.properties
-          
-          # Fix 3: Force specific Gradle versions known to work
-          sed -i 's/com.android.tools.build:gradle:.*"/com.android.tools.build:gradle:7.3.0"/' android/build.gradle
-          sed -i 's/org.jetbrains.kotlin:kotlin-gradle-plugin:.*"/org.jetbrains.kotlin:kotlin-gradle-plugin:1.7.10"/' android/build.gradle
+          # 2. app/build.gradle ফাইলে ভার্সন হার্ডকোড করা (যেন file_picker কনফিউজড না হয়)
+          sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 34/' app/build.gradle
+          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 21/' app/build.gradle
+          sed -i 's/targetSdk = flutter.targetSdkVersion/targetSdk = 34/' app/build.gradle
 
       - name: Update AndroidManifest (Full Permissions + Embedding Fix)
         run: |
