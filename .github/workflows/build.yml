@@ -36,10 +36,20 @@ jobs:
           flutter pub add permission_handler
           flutter pub add file_picker
 
-      - name: Fix Android Min SDK
+      - name: Fix Android Min SDK & Gradle Config
         run: |
           cd /tmp/app
+          
+          # Fix 1: Set Min SDK
           echo "flutter.minSdkVersion=21" >> android/local.properties
+          
+          # Fix 2: Provide missing Flutter properties for plugins like file_picker
+          echo "flutter.targetSdkVersion=33" >> android/local.properties
+          echo "flutter.compileSdkVersion=33" >> android/local.properties
+          
+          # Fix 3: Force specific Gradle versions known to work
+          sed -i 's/com.android.tools.build:gradle:.*"/com.android.tools.build:gradle:7.3.0"/' android/build.gradle
+          sed -i 's/org.jetbrains.kotlin:kotlin-gradle-plugin:.*"/org.jetbrains.kotlin:kotlin-gradle-plugin:1.7.10"/' android/build.gradle
 
       - name: Update AndroidManifest (Full Permissions + Embedding Fix)
         run: |
@@ -48,21 +58,13 @@ jobs:
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               package="com.example.app">
 
-              <!-- Internet -->
               <uses-permission android:name="android.permission.INTERNET"/>
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
-
-              <!-- Storage & Camera (For File Upload) -->
               <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
               <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
               <uses-permission android:name="android.permission.CAMERA"/>
-              
-              <!-- Android 13+ Media Permissions -->
               <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
               <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
-              <uses-permission android:name="android.permission.READ_MEDIA_AUDIO"/>
-              
-              <!-- Notifications -->
               <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
               <application
@@ -189,31 +191,22 @@ jobs:
                 )
                 ..loadRequest(Uri.parse(url));
 
-              // CRITICAL: Enable file upload for Android WebView
               if (webViewController.platform is AndroidWebViewController) {
                 AndroidWebViewController.enableDebugging(false);
-                
                 final androidController = webViewController.platform as AndroidWebViewController;
-                
                 androidController.setMediaPlaybackRequiresUserGesture(false);
                 
-                // This handles the file chooser when user clicks <input type="file">
                 androidController.setOnShowFileSelector((params) async {
                   try {
                     FilePickerResult? result = await FilePicker.platform.pickFiles(
                       allowMultiple: params.acceptTypes.isEmpty || params.mode == FileSelectorMode.openMultiple,
                       type: FileType.any,
                     );
-
                     if (result != null && result.files.isNotEmpty) {
-                      return result.files
-                          .where((file) => file.path != null)
-                          .map((file) => file.path!)
-                          .toList();
+                      return result.files.where((f) => f.path != null).map((f) => f.path!).toList();
                     }
                     return [];
                   } catch (e) {
-                    print('File picker error: $e');
                     return [];
                   }
                 });
@@ -236,10 +229,7 @@ jobs:
                   child: Stack(
                     children: [
                       WebViewWidget(controller: controller),
-                      
-                      if (loading)
-                        const Center(child: CircularProgressIndicator(color: Colors.blue)),
-
+                      if (loading) const Center(child: CircularProgressIndicator()),
                       if (errorText != null)
                         Center(
                           child: Padding(
@@ -249,16 +239,8 @@ jobs:
                               children: [
                                 const Icon(Icons.error_outline, size: 48, color: Colors.white),
                                 const SizedBox(height: 10),
-                                const Text("Connection Error", 
-                                    style: TextStyle(color: Colors.white, fontSize: 18)),
-                                const SizedBox(height: 5),
-                                Text(errorText!, textAlign: TextAlign.center, 
-                                    style: const TextStyle(color: Colors.white70)),
-                                const SizedBox(height: 20),
-                                ElevatedButton(
-                                  onPressed: reloadPage, 
-                                  child: const Text("Retry")
-                                ),
+                                Text(errorText!, style: const TextStyle(color: Colors.white)),
+                                ElevatedButton(onPressed: reloadPage, child: const Text("Retry")),
                               ],
                             ),
                           ),
