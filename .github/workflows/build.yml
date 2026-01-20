@@ -24,45 +24,37 @@ jobs:
           flutter-version: "3.24.5"
           channel: "stable"
 
-      - name: Set App URL
-        run: echo "APP_URL=https://customise-web-hosting-pps.onrender.com" >> $GITHUB_ENV
-
       - name: Create Flutter project
         run: |
           flutter create /tmp/app
           cd /tmp/app
-          # শুধু webview_flutter + permission_handler
-          flutter pub add webview_flutter
-          flutter pub add permission_handler
+          # official webview এর বদলে webview_flutter_upload ব্যবহার করছি
+          flutter pub add webview_flutter_upload
 
       - name: Set Android minSdkVersion
         run: |
           cd /tmp/app
           echo "flutter.minSdkVersion=21" >> android/local.properties
 
-      - name: Use default android/build.gradle (কোন হ্যাক না)
-        run: |
-          cd /tmp/app/android
-          # কিছুই টাচ করব না, Flutter ডিফল্ট ফাইলই থাকবে
-
-      - name: Update AndroidManifest (Permissions)
+      - name: Update AndroidManifest (Permissions + App Name)
         run: |
           cd /tmp/app
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               package="com.example.app">
 
+              <!-- Internet -->
               <uses-permission android:name="android.permission.INTERNET"/>
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
 
-              <!-- Storage / Media permissions (Android 13 পর্যন্ত কভার) -->
+              <!-- Storage / Media / Camera (file upload input এর জন্য) -->
               <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
               <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
               <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
               <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
               <uses-permission android:name="android.permission.CAMERA"/>
 
-              <!-- Notifications -->
+              <!-- Notifications (future use) -->
               <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
               <application
@@ -95,17 +87,18 @@ jobs:
           </manifest>
           EOF
 
-      - name: Replace main.dart (Simple WebView App)
+      - name: Replace main.dart (WebView + File Upload Support)
         run: |
           cd /tmp/app
           cat > lib/main.dart << 'DARTEOF'
           import 'package:flutter/material.dart';
           import 'package:flutter/services.dart';
-          import 'package:webview_flutter/webview_flutter.dart';
-          import 'package:permission_handler/permission_handler.dart';
+          // এই import টা webview_flutter_upload থেকে
+          import 'package:webview_flutter_upload/webview_flutter.dart';
 
           void main() {
             WidgetsFlutterBinding.ensureInitialized();
+            // Full screen
             SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
             runApp(const MyApp());
           }
@@ -134,62 +127,48 @@ jobs:
             late final WebViewController _controller;
             bool _loading = true;
             String? _error;
-            final String _url = const String.fromEnvironment(
-              'APP_URL',
-              defaultValue: 'https://customise-web-hosting-pps.onrender.com',
-            );
+
+            // তোমার সাইটের URL – সরাসরি হার্ডকোড করলাম
+            final String _url = 'https://customise-web-hosting-pps.onrender.com';
 
             @override
             void initState() {
               super.initState();
-              _requestPermissions();
+
               _controller = WebViewController()
                 ..setJavaScriptMode(JavaScriptMode.unrestricted)
+                ..setBackgroundColor(const Color(0xFF000000))
                 ..setNavigationDelegate(
                   NavigationDelegate(
                     onPageStarted: (_) {
-                      if (mounted) {
-                        setState(() {
-                          _loading = true;
-                          _error = null;
-                        });
-                      }
+                      if (!mounted) return;
+                      setState(() {
+                        _loading = true;
+                        _error = null;
+                      });
                     },
                     onPageFinished: (_) {
-                      if (mounted) {
-                        setState(() => _loading = false);
-                      }
+                      if (!mounted) return;
+                      setState(() => _loading = false);
                     },
                     onWebResourceError: (err) {
-                      if (mounted) {
-                        setState(() {
-                          _loading = false;
-                          _error = err.description;
-                        });
-                      }
+                      if (!mounted) return;
+                      setState(() {
+                        _loading = false;
+                        _error = err.description;
+                      });
                     },
                   ),
                 )
                 ..loadRequest(Uri.parse(_url));
             }
 
-            Future<void> _requestPermissions() async {
-              await [
-                Permission.storage,
-                Permission.photos,
-                Permission.videos,
-                Permission.camera,
-                Permission.notification,
-              ].request();
-            }
-
             Future<void> _reload() async {
-              if (mounted) {
-                setState(() {
-                  _loading = true;
-                  _error = null;
-                });
-              }
+              if (!mounted) return;
+              setState(() {
+                _loading = true;
+                _error = null;
+              });
               await _controller.clearCache();
               await _controller.loadRequest(Uri.parse(_url));
             }
@@ -202,8 +181,10 @@ jobs:
                   child: Stack(
                     children: [
                       WebViewWidget(controller: _controller),
+
                       if (_loading)
                         const Center(child: CircularProgressIndicator()),
+
                       if (_error != null)
                         Center(
                           child: Padding(
@@ -211,11 +192,13 @@ jobs:
                             child: Column(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                const Icon(Icons.error_outline, size: 48, color: Colors.white),
+                                const Icon(Icons.error_outline,
+                                    size: 48, color: Colors.white),
                                 const SizedBox(height: 10),
                                 Text(
                                   _error!,
-                                  style: const TextStyle(color: Colors.white),
+                                  style:
+                                      const TextStyle(color: Colors.white),
                                   textAlign: TextAlign.center,
                                 ),
                                 const SizedBox(height: 10),
@@ -238,7 +221,7 @@ jobs:
       - name: Build APK
         run: |
           cd /tmp/app
-          flutter build apk --release --dart-define=APP_URL="${APP_URL}"
+          flutter build apk --release
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
