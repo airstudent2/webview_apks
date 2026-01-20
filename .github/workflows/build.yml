@@ -31,18 +31,17 @@ jobs:
         run: |
           flutter create /tmp/app
           cd /tmp/app
-          # ফাইল আপলোডের জন্য লেটেস্ট webview_flutter_android প্যাকেজ দরকার হতে পারে
           flutter pub add webview_flutter
           flutter pub add webview_flutter_android
           flutter pub add permission_handler
-          flutter pub add file_selector
+          flutter pub add file_picker
 
       - name: Fix Android Min SDK
         run: |
           cd /tmp/app
           echo "flutter.minSdkVersion=21" >> android/local.properties
 
-      - name: Update AndroidManifest (Fix Permissions & App Name)
+      - name: Update AndroidManifest (Full Permissions + Embedding Fix)
         run: |
           cd /tmp/app
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
@@ -97,22 +96,19 @@ jobs:
           </manifest>
           EOF
 
-      - name: Replace main.dart (File Upload Fix + Full Screen + Smoothness)
+      - name: Replace main.dart (File Upload Fix + Full Screen)
         run: |
           cd /tmp/app
-          cat > lib/main.dart << EOF
-          import 'dart:io';
+          cat > lib/main.dart << 'DARTEOF'
           import 'package:flutter/material.dart';
           import 'package:flutter/services.dart';
           import 'package:webview_flutter/webview_flutter.dart';
-          // ফাইল আপলোডের জন্য অ্যান্ড্রয়েড স্পেসিফিক ইমপোর্ট
           import 'package:webview_flutter_android/webview_flutter_android.dart';
           import 'package:permission_handler/permission_handler.dart';
-          import 'package:file_selector/file_selector.dart';
+          import 'package:file_picker/file_picker.dart';
 
           void main() {
             WidgetsFlutterBinding.ensureInitialized();
-            // Full Screen Mode
             SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
             runApp(const MyApp());
           }
@@ -141,7 +137,8 @@ jobs:
             late final WebViewController controller;
             bool loading = true;
             String? errorText;
-            final String url = "${APP_URL}";
+            final String url = const String.fromEnvironment('APP_URL', 
+                defaultValue: 'https://customise-web-hosting-pps.onrender.com');
 
             @override
             void initState() {
@@ -150,17 +147,26 @@ jobs:
               initWebView();
             }
 
-            // Android File Upload Handler setup
+            Future<void> requestPermissions() async {
+              await [
+                Permission.camera,
+                Permission.storage,
+                Permission.notification,
+                Permission.photos,
+                Permission.videos,
+              ].request();
+            }
+
             void initWebView() {
               late final PlatformWebViewControllerCreationParams params;
+              
               if (WebViewPlatform.instance is AndroidWebViewPlatform) {
                 params = AndroidWebViewControllerCreationParams();
               } else {
                 params = const PlatformWebViewControllerCreationParams();
               }
 
-              final WebViewController webViewController =
-                  WebViewController.fromPlatformCreationParams(params);
+              final webViewController = WebViewController.fromPlatformCreationParams(params);
 
               webViewController
                 ..setJavaScriptMode(JavaScriptMode.unrestricted)
@@ -176,44 +182,44 @@ jobs:
                     onWebResourceError: (err) {
                       if (mounted) setState(() { 
                         loading = false; 
-                        errorText = "\${err.description}"; 
+                        errorText = err.description; 
                       });
                     },
                   ),
                 )
                 ..loadRequest(Uri.parse(url));
 
-              // Android File Upload Fix logic
+              // CRITICAL: Enable file upload for Android WebView
               if (webViewController.platform is AndroidWebViewController) {
-                AndroidWebViewController.enableDebugging(true);
-                (webViewController.platform as AndroidWebViewController)
-                    .setMediaPlaybackRequiresUserGesture(false);
-                    
-                // This function handles the file chooser intent
-                (webViewController.platform as AndroidWebViewController)
-                    .setOnShowFileSelector((params) async {
-                  // This is a simple implementation. For full camera support, more logic is needed.
-                  // But this enables the basic file picker.
-                  return []; // In a real app, you would implement file picking logic here if standard intent fails.
-                  // However, webview_flutter usually handles standard inputs if permissions are right.
-                  // But to be safe, we need the permissions we added in Manifest.
+                AndroidWebViewController.enableDebugging(false);
+                
+                final androidController = webViewController.platform as AndroidWebViewController;
+                
+                androidController.setMediaPlaybackRequiresUserGesture(false);
+                
+                // This handles the file chooser when user clicks <input type="file">
+                androidController.setOnShowFileSelector((params) async {
+                  try {
+                    FilePickerResult? result = await FilePicker.platform.pickFiles(
+                      allowMultiple: params.acceptTypes.isEmpty || params.mode == FileSelectorMode.openMultiple,
+                      type: FileType.any,
+                    );
+
+                    if (result != null && result.files.isNotEmpty) {
+                      return result.files
+                          .where((file) => file.path != null)
+                          .map((file) => file.path!)
+                          .toList();
+                    }
+                    return [];
+                  } catch (e) {
+                    print('File picker error: $e');
+                    return [];
+                  }
                 });
               }
 
               controller = webViewController;
-            }
-
-            Future<void> requestPermissions() async {
-              // Requesting all necessary permissions for file upload & notifications
-              Map<Permission, PermissionStatus> statuses = await [
-                Permission.camera,
-                Permission.storage,
-                Permission.notification,
-                // Android 13 specific
-                Permission.photos,
-                Permission.videos,
-                Permission.audio,
-              ].request();
             }
 
             Future<void> reloadPage() async {
@@ -232,7 +238,7 @@ jobs:
                       WebViewWidget(controller: controller),
                       
                       if (loading)
-                        const Center(child: CircularProgressIndicator()),
+                        const Center(child: CircularProgressIndicator(color: Colors.blue)),
 
                       if (errorText != null)
                         Center(
@@ -243,11 +249,16 @@ jobs:
                               children: [
                                 const Icon(Icons.error_outline, size: 48, color: Colors.white),
                                 const SizedBox(height: 10),
-                                const Text("Connection Error", style: TextStyle(color: Colors.white, fontSize: 18)),
+                                const Text("Connection Error", 
+                                    style: TextStyle(color: Colors.white, fontSize: 18)),
                                 const SizedBox(height: 5),
-                                Text(errorText!, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70)),
+                                Text(errorText!, textAlign: TextAlign.center, 
+                                    style: const TextStyle(color: Colors.white70)),
                                 const SizedBox(height: 20),
-                                ElevatedButton(onPressed: reloadPage, child: const Text("Retry")),
+                                ElevatedButton(
+                                  onPressed: reloadPage, 
+                                  child: const Text("Retry")
+                                ),
                               ],
                             ),
                           ),
@@ -258,12 +269,12 @@ jobs:
               );
             }
           }
-          EOF
+          DARTEOF
 
       - name: Build APK
         run: |
           cd /tmp/app
-          flutter build apk --release
+          flutter build apk --release --dart-define=APP_URL="${APP_URL}"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
