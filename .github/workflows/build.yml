@@ -36,21 +36,35 @@ jobs:
           flutter pub add permission_handler
           flutter pub add file_picker
 
-      - name: Fix Android Build Configuration (Critical Fix)
+      - name: Fix Android Build Configuration (Forcing Subprojects)
         run: |
           cd /tmp/app/android
           
-          # 1. local.properties-এ SDK ভার্সন সেট করা
+          # 1. local.properties এ ভ্যালু সেট করা (নিরাপত্তার জন্য)
           echo "flutter.minSdkVersion=21" >> local.properties
           echo "flutter.targetSdkVersion=34" >> local.properties
           echo "flutter.compileSdkVersion=34" >> local.properties
-          
-          # 2. app/build.gradle ফাইলে ভার্সন হার্ডকোড করা (যেন file_picker কনফিউজড না হয়)
-          sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 34/' app/build.gradle
-          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 21/' app/build.gradle
-          sed -i 's/targetSdk = flutter.targetSdkVersion/targetSdk = 34/' app/build.gradle
 
-      - name: Update AndroidManifest (Full Permissions + Embedding Fix)
+          # 2. সবচেয়ে গুরুত্বপূর্ণ ফিক্স: root build.gradle এ সাব-প্রজেক্ট কনফিগারেশন ইনজেক্ট করা
+          # এটি file_picker সহ সব প্লাগইনকে সঠিক SDK ভার্সন ব্যবহার করতে বাধ্য করবে।
+          cat >> build.gradle << 'GRADLE_EOF'
+
+          subprojects {
+              afterEvaluate { project ->
+                  if (project.hasProperty("android")) {
+                      android {
+                          compileSdkVersion 34
+                          defaultConfig {
+                              minSdkVersion 21
+                              targetSdkVersion 34
+                          }
+                      }
+                  }
+              }
+          }
+          GRADLE_EOF
+
+      - name: Update AndroidManifest (Full Permissions)
         run: |
           cd /tmp/app
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
@@ -97,7 +111,7 @@ jobs:
           </manifest>
           EOF
 
-      - name: Replace main.dart (File Upload Fix + Full Screen)
+      - name: Replace main.dart (File Upload Fix)
         run: |
           cd /tmp/app
           cat > lib/main.dart << 'DARTEOF'
