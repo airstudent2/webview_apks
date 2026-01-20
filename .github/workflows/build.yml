@@ -29,27 +29,33 @@ jobs:
 
       - name: Create Flutter project
         run: |
-          # ডিফল্ট প্যাকেজ নাম com.example.app দিয়ে প্রজেক্ট তৈরি হচ্ছে
           flutter create /tmp/app
           cd /tmp/app
           flutter pub add webview_flutter
+          flutter pub add permission_handler
 
       - name: Fix Android Min SDK
         run: |
           cd /tmp/app
-          # WebView ঠিকভাবে চলার জন্য মিনিমাম SDK 21 প্রয়োজন
           echo "flutter.minSdkVersion=21" >> android/local.properties
 
-      - name: Update AndroidManifest (Fix Embedding V1 Error)
+      - name: Update AndroidManifest (Permissions + Embedding Fix)
         run: |
           cd /tmp/app
-          # এখানে আমরা নতুন manifest লিখছি কিন্তু প্রয়োজনীয় ট্যাগগুলো রেখে দিচ্ছি
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               package="com.example.app">
 
+              <!-- Internet Permissions -->
               <uses-permission android:name="android.permission.INTERNET"/>
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+
+              <!-- Storage Permissions -->
+              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
+              <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
+              
+              <!-- Notification Permission (Android 13+) -->
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
               <application
                   android:label="WebView App"
@@ -75,7 +81,6 @@ jobs:
                       </intent-filter>
                   </activity>
                   
-                  <!-- এটি খুব জরুরি: এরর ফিক্স করার জন্য v2 embedding ট্যাগ -->
                   <meta-data
                       android:name="flutterEmbedding"
                       android:value="2" />
@@ -83,15 +88,21 @@ jobs:
           </manifest>
           EOF
 
-      - name: Replace main.dart (Fix ERR_CACHE_MISS + Retry)
+      - name: Replace main.dart (FullScreen + Permissions + WebView)
         run: |
           cd /tmp/app
-          # এখানে আপনার ওয়েবসাইট লিঙ্ক অটোমেটিক বসে যাবে
           cat > lib/main.dart << EOF
           import 'package:flutter/material.dart';
+          import 'package:flutter/services.dart';
           import 'package:webview_flutter/webview_flutter.dart';
+          import 'package:permission_handler/permission_handler.dart';
 
-          void main() => runApp(const MyApp());
+          void main() {
+            WidgetsFlutterBinding.ensureInitialized();
+            // Hide Status Bar & Navigation Bar for Full Screen
+            SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+            runApp(const MyApp());
+          }
 
           class MyApp extends StatelessWidget {
             const MyApp({super.key});
@@ -121,6 +132,8 @@ jobs:
             @override
             void initState() {
               super.initState();
+              requestPermissions(); // Request permissions on startup
+              
               controller = WebViewController()
                 ..setJavaScriptMode(JavaScriptMode.unrestricted)
                 ..setNavigationDelegate(
@@ -134,13 +147,21 @@ jobs:
                     onWebResourceError: (err) {
                       if (mounted) setState(() { 
                         loading = false; 
-                        errorText = "\${err.description} (\${err.errorCode})"; 
+                        errorText = "\${err.description}"; 
                       });
                     },
                   ),
                 )
                 ..clearCache()
                 ..loadRequest(Uri.parse(url));
+            }
+
+            // Function to request Notifications & Storage permissions
+            Future<void> requestPermissions() async {
+              await [
+                Permission.notification,
+                Permission.storage,
+              ].request();
             }
 
             Future<void> reloadPage() async {
@@ -151,36 +172,37 @@ jobs:
 
             @override
             Widget build(BuildContext context) {
+              // SafeArea prevents content from being hidden behind the notch
               return Scaffold(
-                appBar: AppBar(
-                  title: const Text("WebView App"),
-                  actions: [
-                    IconButton(icon: const Icon(Icons.refresh), onPressed: reloadPage),
-                  ],
-                ),
-                body: Stack(
-                  children: [
-                    WebViewWidget(controller: controller),
-                    if (loading) const Center(child: CircularProgressIndicator()),
-                    if (errorText != null)
-                      Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(20),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.wifi_off, size: 50, color: Colors.red),
-                              const SizedBox(height: 10),
-                              const Text("Connection Failed", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                              const SizedBox(height: 5),
-                              Text(errorText!, textAlign: TextAlign.center),
-                              const SizedBox(height: 15),
-                              ElevatedButton(onPressed: reloadPage, child: const Text("Retry")),
-                            ],
+                backgroundColor: Colors.black, // Background color matches dark theme
+                body: SafeArea(
+                  child: Stack(
+                    children: [
+                      WebViewWidget(controller: controller),
+                      
+                      if (loading)
+                        const Center(child: CircularProgressIndicator()),
+
+                      if (errorText != null)
+                        Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(20),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.wifi_off, size: 50, color: Colors.white),
+                                const SizedBox(height: 10),
+                                const Text("Connection Failed", style: TextStyle(color: Colors.white, fontSize: 18)),
+                                const SizedBox(height: 5),
+                                Text(errorText!, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70)),
+                                const SizedBox(height: 15),
+                                ElevatedButton(onPressed: reloadPage, child: const Text("Retry")),
+                              ],
+                            ),
                           ),
                         ),
-                      ),
-                  ],
+                    ],
+                  ),
                 ),
               );
             }
